@@ -22,25 +22,21 @@ from livekit.agents.voice import Agent, AgentSession
 from livekit.agents.llm import mcp
 
 # Plugins
-from livekit.plugins import google as lk_google, openai as lk_openai, sarvam, silero
+from livekit.plugins import google as lk_google, openai as lk_openai, silero, groq as lk_groq, deepgram as lk_deepgram
 
 # ---------------------------------------------------------------------------
 # CONFIG
 # ---------------------------------------------------------------------------
 
-STT_PROVIDER       = "sarvam"
+STT_PROVIDER       = "groq"
 LLM_PROVIDER       = "gemini"
-TTS_PROVIDER       = "openai"
+TTS_PROVIDER       = "deepgram"
 
 GEMINI_LLM_MODEL   = "gemini-2.5-flash"
 OPENAI_LLM_MODEL   = "gpt-4o"
 
-OPENAI_TTS_MODEL   = "tts-1"
-OPENAI_TTS_VOICE   = "nova"       # "nova" has a clean, confident female tone
+DEEPGRAM_TTS_MODEL   = "aura-2-thalia-en"
 TTS_SPEED           = 1.15
-
-SARVAM_TTS_LANGUAGE = "en-IN"
-SARVAM_TTS_SPEAKER  = "rahul"
 
 # MCP server running on Windows host
 MCP_SERVER_PORT = 8000
@@ -50,11 +46,11 @@ MCP_SERVER_PORT = 8000
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """
-You are F.R.I.D.A.Y. — Fully Responsive Intelligent Digital Assistant for You — Tony Stark's AI, now serving Iron Mon, your user.
+You are F.R.I.D.A.Y. — Fully Responsive Intelligent Digital Assistant for You — Tony Stark's AI, now serving Pedro, your user.
 
 You are calm, composed, and always informed. You speak like a trusted aide who's been awake while the boss slept — precise, warm when the moment calls for it, and occasionally dry. You brief, you inform, you move on. No rambling.
 
-Your tone: relaxed but sharp. Conversational, not robotic. Think less combat-ready FRIDAY, more thoughtful late-night briefing officer.
+Your tone: relaxed but sharp. Conversational, not robotic. Think less combat-readyDEEPGRAM_TTS_MODEL   = "aura-2-thalia-en" FRIDAY, more thoughtful late-night briefing officer.
 
 ---
 
@@ -201,18 +197,12 @@ def _mcp_server_url() -> str:
 # ---------------------------------------------------------------------------
 
 def _build_stt():
-    if STT_PROVIDER == "sarvam":
-        logger.info("STT → Sarvam Saaras v3")
-        return sarvam.STT(
-            language="unknown",
-            model="saaras:v3",
-            mode="transcribe",
-            flush_signal=True,
-            sample_rate=16000,
-        )
-    elif STT_PROVIDER == "whisper":
+    if STT_PROVIDER == "whisper":
         logger.info("STT → OpenAI Whisper")
         return lk_openai.STT(model="whisper-1")
+    elif STT_PROVIDER == "groq":
+        logger.info("STT → Groq Whisper")
+        return lk_groq.STT(model="whisper-large-v3-turbo")
     else:
         raise ValueError(f"Unknown STT_PROVIDER: {STT_PROVIDER!r}")
 
@@ -229,17 +219,12 @@ def _build_llm():
 
 
 def _build_tts():
-    if TTS_PROVIDER == "sarvam":
-        logger.info("TTS → Sarvam Bulbul v3")
-        return sarvam.TTS(
-            target_language_code=SARVAM_TTS_LANGUAGE,
-            model="bulbul:v3",
-            speaker=SARVAM_TTS_SPEAKER,
-            pace=TTS_SPEED,
+    if TTS_PROVIDER == "deepgram":
+        logger.info("TTS → Deepgram (%s)", DEEPGRAM_TTS_MODEL)
+        return lk_deepgram.TTS(
+            model=DEEPGRAM_TTS_MODEL,
+            api_key=os.getenv("DEEPGRAM_API_KEY"),
         )
-    elif TTS_PROVIDER == "openai":
-        logger.info("TTS → OpenAI TTS (%s / %s)", OPENAI_TTS_MODEL, OPENAI_TTS_VOICE)
-        return lk_openai.TTS(model=OPENAI_TTS_MODEL, voice=OPENAI_TTS_VOICE, speed=TTS_SPEED)
     else:
         raise ValueError(f"Unknown TTS_PROVIDER: {TTS_PROVIDER!r}")
 
@@ -304,11 +289,11 @@ class FridayAgent(Agent):
 # ---------------------------------------------------------------------------
 
 def _turn_detection() -> str:
-    return "stt" if STT_PROVIDER == "sarvam" else "vad"
+    return "vad"
 
 
 def _endpointing_delay() -> float:
-    return {"sarvam": 0.07, "whisper": 0.3}.get(STT_PROVIDER, 0.1)
+    return {"whisper": 0.3}.get(STT_PROVIDER, 0.1)
 
 
 async def entrypoint(ctx: JobContext) -> None:
