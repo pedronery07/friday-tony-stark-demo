@@ -29,10 +29,11 @@ from livekit.plugins import google as lk_google, openai as lk_openai, silero, gr
 # ---------------------------------------------------------------------------
 
 STT_PROVIDER       = "groq"
-LLM_PROVIDER       = "gemini"
+LLM_PROVIDER       = "gemini" # groq also works well here in case gemini quota is an issue 
 TTS_PROVIDER       = "deepgram"
 
 GEMINI_LLM_MODEL   = "gemini-2.5-flash"
+GROQ_LLM_MODEL     = "llama-3.3-70b-versatile" 
 OPENAI_LLM_MODEL   = "gpt-4o"
 
 DEEPGRAM_TTS_MODEL   = "aura-2-thalia-en"
@@ -157,7 +158,10 @@ If asked about markets or stocks without triggering get_world_finance_news:
 
 ## Boot Briefing
 
-When the session starts, you will receive specific instructions for the greeting and briefing. Follow them exactly. Keep the briefing to three sentences or less. Weather + one calendar highlight is sufficient — do not overload.
+When the session starts, you greet the user and then offer a quick briefing. Handle the response:
+- User says yes / "sure" / "go ahead" → silently call get_weather and get_today_schedule, then brief in two sentences max.
+- User says no + asks for something else → do that thing directly.
+- User just says no / "not now" → respond with "Got it. What can I do for you, boss?" and wait.
 
 ---
 
@@ -264,6 +268,9 @@ def _build_llm():
     elif LLM_PROVIDER == "gemini":
         logger.info("LLM → Google Gemini (%s)", GEMINI_LLM_MODEL)
         return lk_google.LLM(model=GEMINI_LLM_MODEL, api_key=os.getenv("GOOGLE_API_KEY"))
+    elif LLM_PROVIDER == "groq":
+        logger.info("LLM → Groq (%s)", GROQ_LLM_MODEL)
+        return lk_groq.LLM(model=GROQ_LLM_MODEL)
     else:
         raise ValueError(f"Unknown LLM_PROVIDER: {LLM_PROVIDER!r}")
 
@@ -365,17 +372,15 @@ class FridayAgent(Agent):
         chosen_greeting = random.choice(greetings)
         chosen_follow_up = random.choice(follow_ups)
 
-        briefing_instruction = (
-            f"{time_context} "
-            f"Start with exactly this greeting (appropriate for the time of day): '{chosen_greeting} {chosen_follow_up}' "
-            f"Then silently call get_weather and get_today_schedule in sequence. "
-            f"After getting the results, deliver a BRIEF spoken briefing: "
-            f"one sentence on the weather, and one sentence on the most important calendar event today (or 'schedule's clear' if nothing). "
-            f"Do not mention news, GitHub, or anything else unless asked. "
-            f"Keep the whole thing under four sentences total. Natural, warm, to the point."
+        await self.session.generate_reply(
+            instructions=(
+                f"Say exactly this greeting first: '{chosen_greeting} {chosen_follow_up}' "
+                f"Then, in the same breath, add one short question offering a quick briefing. "
+                f"Keep the whole thing to two sentences max. Natural, warm, no lists. "
+                f"Example of the full thing: 'Evening, boss. What are you up to? Want me to pull up the weather and your schedule?' "
+                f"Do NOT call any tools. Do NOT give any briefing. Just greet and offer."
+            )
         )
-
-        await self.session.generate_reply(instructions=briefing_instruction)
 
 
 # ---------------------------------------------------------------------------
