@@ -10,6 +10,9 @@ dependencies = [
     "livekit-agents[deepgram,groq,openai,sarvam,silero]>=1.5.1",
     "livekit-plugins-google>=1.5.1",
     "python-dotenv",
+    "google-auth",
+    "google-auth-oauthlib",
+    "google-api-python-client",
 ]
 
 [project.scripts]

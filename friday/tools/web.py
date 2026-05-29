@@ -23,6 +23,13 @@ FINANCE_SEED_FEEDS = [
     'https://rss.nytimes.com/services/xml/rss/nyt/Business.xml',  # NYT Business
 ]
 
+BRAZIL_SEED_FEEDS = [
+    'https://g1.globo.com/rss/g1/',                                          # G1 Globo
+    'https://feeds.folha.uol.com.br/folha/emcimadahora/rss091.xml',          # Folha de S.Paulo
+    'https://agenciabrasil.ebc.com.br/rss/ultimasnoticias/feed.xml',         # Agência Brasil
+    'https://www.bbc.com/portuguese/index.xml',                              # BBC Brasil
+]
+
 async def fetch_and_parse_feed(client, url):
     """Helper function to handle a single feed request and parse its XML."""
     try:
@@ -105,6 +112,28 @@ def register(mcp):
             return "The financial feeds are unresponsive right now, sir. I can't pull market headlines."
 
         report = ["### FINANCE BRIEFING (LIVE)\n"]
+        for entry in all_articles[:12]:
+            report.append(f"**[{entry['source']}]** {entry['title']}")
+            report.append(f"{entry['summary']}")
+            report.append(f"Link: {entry['link']}\n")
+
+        return "\n".join(report)
+
+    @mcp.tool()
+    async def get_brazil_news() -> str:
+        """
+        Fetches the latest Brazilian headlines from major national outlets (G1, Folha, Agência Brasil, BBC Brasil).
+        Headlines are in Portuguese. Use when the user asks about Brazil, Brazilian news, or what's happening in Brazil.
+        """
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            tasks = [fetch_and_parse_feed(client, url) for url in BRAZIL_SEED_FEEDS]
+            results_of_lists = await asyncio.gather(*tasks)
+            all_articles = [item for sublist in results_of_lists for item in sublist]
+
+        if not all_articles:
+            return "The Brazilian news feeds are unresponsive, sir. I can't pull headlines from Brazil right now."
+
+        report = ["### BRAZIL NEWS BRIEFING (LIVE)\n"]
         for entry in all_articles[:12]:
             report.append(f"**[{entry['source']}]** {entry['title']}")
             report.append(f"{entry['summary']}")
