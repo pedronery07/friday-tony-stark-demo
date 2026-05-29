@@ -13,43 +13,52 @@ Paste them in the playground settings, then hit **Connect**.
 
 ## Architecture
 
-Two processes run permanently as systemd services:
+Three processes run permanently:
 
 ```
 Boot
- ├── friday-mcp.service    →  uv run friday          (MCP tools, port 8000)
- └── friday-agent.service  →  uv run agent_friday.py dev  (voice, LiveKit)
+ ├── friday-mcp.service       →  uv run friday                (MCP tools, port 8000)  [system]
+ ├── friday-agent.service     →  uv run agent_friday.py dev   (voice, LiveKit)        [system]
+ └── friday-reminders.service →  uv run python friday_reminders.py  (reminder daemon) [user]
 ```
 
-The agent depends on the MCP server — if MCP is down, the agent won't start.
-Both services restart automatically on failure (`Restart=on-failure`).
+- MCP and agent are **system-level** services (`sudo systemctl`).
+- Reminder daemon is a **user-level** service (`systemctl --user`) — needs access to the desktop for `notify-send`.
+- All three restart automatically on failure.
 
 External data stored in `~/.friday/` (outside the repo, never committed):
-- `memory.json` — persistent memories
-- `google_credentials.json` — Google Calendar OAuth credentials
-- `google_token.json` — auto-generated after first Calendar auth
+
+| File | Contents |
+|---|---|
+| `memory.json` | Persistent memories |
+| `timers.json` | Pending reminders |
+| `reminders_missed.json` | Reminders that fired while no session was active |
+| `google_credentials.json` | Google Calendar OAuth credentials |
+| `google_token.json` | Auto-generated after first Calendar auth |
 
 ---
 
 ## Daily Use
 
-Nothing to do — both services start automatically on boot.
-
-Useful commands:
+Nothing to do — all three services start automatically on boot.
 
 ```bash
 # Check service health
 systemctl status friday-mcp friday-agent
+systemctl --user status friday-reminders
 
 # Live logs
 journalctl -u friday-agent -f
 journalctl -u friday-mcp -f
+journalctl --user -u friday-reminders -f
 
 # Manual restart
 sudo systemctl restart friday-mcp friday-agent
+systemctl --user restart friday-reminders
 
 # Disable autostart
 sudo systemctl disable friday-mcp friday-agent
+systemctl --user disable friday-reminders
 ```
 
 ---
@@ -57,27 +66,51 @@ sudo systemctl disable friday-mcp friday-agent
 ## One-Time Setup (first install)
 
 ```bash
-# 1. Install service files
+# 1. Install system service files (MCP + agent)
 sudo cp friday-mcp.service /etc/systemd/system/
 sudo cp friday-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
-
-# 2. Enable and start
 sudo systemctl enable friday-mcp friday-agent
 sudo systemctl start friday-mcp friday-agent
+
+# 2. Install user service file (reminder daemon)
+mkdir -p ~/.config/systemd/user/
+cp friday-reminders.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable friday-reminders
+systemctl --user start friday-reminders
 
 # 3. Install dependencies (inside venv)
 source .venv/bin/activate
 uv sync
+
+# 4. Install xclip (clipboard support)
+sudo apt install xclip
 ```
 
 Service files are gitignored (`friday-*`) and stay local only.
 
 ---
 
-## Development Workflow
+## Google Calendar Setup
 
-When making changes and testing locally:
+Calendar uses OAuth2. Run this once to authorize — it opens a browser:
+
+```bash
+source .venv/bin/activate
+python -c "from friday.tools.calendar_tool import _get_service; _get_service(); print('Authorized.')"
+```
+
+The token is saved to `~/.friday/google_token.json` and used automatically on all future runs.
+
+> **If the token stops working** (scope changed or expired): delete it and re-run the command above.
+> ```bash
+> rm ~/.friday/google_token.json
+> ```
+
+---
+
+## Development Workflow
 
 ```bash
 # 1. Stop production services
@@ -93,24 +126,25 @@ uv run agent_friday.py dev      # terminal 2 — voice agent
 sudo systemctl start friday-mcp friday-agent
 ```
 
+The reminder daemon can stay running during development — it's independent.
+
 ---
 
 ## Deploying Updates
 
-After pushing changes to GitHub, deploy to the local production instance:
+After pushing changes to GitHub:
 
 ```bash
 ./deploy.sh
 ```
 
-This script does:
-1. `git pull` — fetches latest changes
-2. `uv sync` — installs any new dependencies
-3. `systemctl restart` — reloads both services
+This script: `git pull` → `uv sync` → `systemctl restart` (MCP + agent).
 
-`deploy.sh` is gitignored (`*.sh`) and stays local only.
-
-> **Note:** Updates are **not automatic**. You must run `./deploy.sh` manually after each push.
+> **Updates are not automatic.** Run `./deploy.sh` manually after each push.
+> The reminder daemon is not restarted by `deploy.sh` — restart it manually if `friday_reminders.py` changed:
+> ```bash
+> systemctl --user restart friday-reminders
+> ```
 
 ---
 
@@ -119,10 +153,18 @@ This script does:
 | Trigger | What Friday does |
 |---|---|
 | "What's happening?" / "Any news?" | Global news brief → opens world monitor |
-| "Notícias do Brasil" / "Brazil news" | Brazilian news brief (G1, Folha, BBC Brasil) |
+| "Notícias do Brasil" / "Brazil news" | Brazilian news brief (G1, Folha, Agência Brasil, BBC Brasil) |
 | "Finance update" / "Markets?" | Finance brief → opens finance monitor |
 | "What's the weather?" | Current conditions for your city |
 | "What's on my agenda?" | Today's Google Calendar events |
+| "What's on this week?" | Events from today through Sunday, grouped by day |
+| "Schedule a meeting tomorrow at 3pm" | Creates a Google Calendar event |
+| "Cancel my X appointment" | Deletes a calendar event by title |
+| "Remind me in 20 minutes to..." | Sets a reminder → desktop notification + spoken alert |
+| "Any timers running?" | Lists pending reminders |
+| "Cancel the X reminder" | Cancels a pending reminder |
+| "Summarize what I copied" | Reads clipboard → fetches URL → summarizes |
+| "Summarize bbc.com" | Fetches and summarizes a webpage |
 | "Any GitHub activity?" | Recent commits, PRs, issues |
 | "Remember that..." | Stores a fact to `~/.friday/memory.json` |
 | "Do you remember..." | Recalls stored facts |

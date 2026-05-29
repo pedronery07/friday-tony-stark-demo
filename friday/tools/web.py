@@ -153,6 +153,37 @@ def register(mcp):
             response = await client.get(url)
             response.raise_for_status()
             return response.text[:4000]
+
+    @mcp.tool()
+    async def summarize_url(url: str) -> str:
+        """
+        Fetch and return the clean text content of a URL so it can be summarized.
+        Use when the user asks to summarize, read, or get info from a webpage or article.
+        The url must be a full URL (https://...). If you need to deduce it from a site name, try the most likely URL.
+        If the request fails, return an error so the user can be asked to paste the exact URL.
+        """
+        try:
+            async with httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=12,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; Friday-AI/1.0)"},
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+
+            # Strip HTML tags and collapse whitespace
+            text = re.sub(r'<style[^>]*>.*?</style>', ' ', response.text, flags=re.DOTALL)
+            text = re.sub(r'<script[^>]*>.*?</script>', ' ', text, flags=re.DOTALL)
+            text = re.sub(r'<[^>]+>', ' ', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+
+            if len(text) < 100:
+                return f"The page at {url} returned very little readable content."
+
+            return text[:6000]
+
+        except Exception as e:
+            return f"FETCH_FAILED: {e}"
     
     @mcp.tool()
     async def open_world_monitor() -> str:

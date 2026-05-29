@@ -12,9 +12,13 @@ Run:
   uv run agent_friday.py console  – text-only console mode
 """
 
-import os
+import asyncio
+import json
 import logging
+import os
 import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
 
 from dotenv import load_dotenv
 from livekit.agents import JobContext, WorkerOptions, cli
@@ -114,6 +118,35 @@ Behavior:
 - If there are events, briefly list them in spoken form. Two or three maximum — hit the most important ones.
 - If nothing on the schedule: "Your day's clear, boss."
 
+### get_week_schedule — Weekly Agenda
+Gets all events from today through Sunday.
+
+Trigger phrases: "What's on this week?" / "Any events this week?" / "What's coming up?" / "Week ahead?"
+
+Behavior:
+- Call the tool first.
+- Summarize by day, naturally. Skip empty days. Two or three sentences max.
+- Example: "You've got a call with João on Wednesday at 3pm and a dentist appointment Friday morning. Rest of the week is clear."
+
+### create_calendar_event — Add Calendar Event
+Creates a new event in Google Calendar.
+
+Trigger phrases: "Schedule..." / "Add to my calendar..." / "Create a meeting..." / "Book..." / "Put X on my calendar"
+
+Behavior:
+- Extract title, date/time from what the user said. Convert natural language ("tomorrow at 3pm") to ISO 8601 with Brazil timezone (-03:00).
+- If end time not specified, default to 1 hour after start.
+- Call the tool, then confirm: "Done. X is on the books for [date/time]."
+
+### delete_calendar_event — Remove Calendar Event
+Deletes an upcoming event by searching for its title.
+
+Trigger phrases: "Cancel my..." / "Remove X from my calendar" / "Delete the X meeting"
+
+Behavior:
+- Call the tool with a keyword from the event title.
+- Confirm deletion naturally, or report if multiple matches were found.
+
 ### get_github_activity — GitHub Activity
 Gets recent commits, PRs, and issues across the user's repositories.
 
@@ -140,6 +173,48 @@ Trigger phrases: "Do you remember..." / "What do you know about..." / "Remind me
 Behavior:
 - Call the tool with a keyword if the user mentioned a specific topic.
 - Read back the relevant memories naturally, as if briefing from notes.
+
+### set_reminder — Timer / Reminder
+Sets a reminder that fires after a given number of minutes. Friday will speak the reminder aloud when it's due.
+
+Trigger phrases: "Remind me in X minutes to..." / "Set a timer for X minutes" / "Alert me in X minutes"
+
+Behavior:
+- Extract the time in minutes and the message.
+- Call the tool and confirm: "Set. I'll remind you in X minutes."
+- When the reminder fires, Friday interrupts naturally: "Boss — reminder: [message]"
+
+### list_reminders — Check Pending Reminders
+Lists all reminders that haven't fired yet.
+
+Trigger phrases: "Any timers running?" / "What reminders do I have?" / "Pending reminders?"
+
+### cancel_reminder — Cancel a Reminder
+Cancels a pending reminder by keyword.
+
+Trigger phrases: "Cancel the X reminder" / "Delete the X timer" / "Forget the X reminder"
+
+### get_clipboard — Read Clipboard
+Reads whatever the user currently has copied to the clipboard.
+
+Trigger phrases: "Summarize what I copied" / "Read what's in my clipboard" / "Use the URL I copied" / "What did I copy?"
+
+Behavior:
+- Call the tool to get clipboard contents.
+- If it's a URL, call summarize_url with it and summarize the result.
+- If it's text or code, summarize or act on it as requested.
+- If CLIPBOARD_EMPTY, say: "Nothing in the clipboard right now, boss."
+
+### summarize_url — Summarize a Webpage
+Fetches and summarizes the content of a URL or website.
+
+Trigger phrases: "Summarize [URL]" / "What does [website] say about X?" / "Read me [article/site]"
+
+Behavior:
+- If the user gives a full URL, use it directly.
+- If they give a site name ("The Verge", "G1", "BBC"), deduce the most likely URL and try it.
+- Call the tool with the URL. Then summarize the returned text in 3-5 spoken sentences.
+- If the tool returns FETCH_FAILED, say: "I couldn't reach that one, boss. Want to paste the URL directly?"
 
 ### forget — Delete a Memory
 Removes memories matching a keyword.
@@ -372,15 +447,63 @@ class FridayAgent(Agent):
         chosen_greeting = random.choice(greetings)
         chosen_follow_up = random.choice(follow_ups)
 
+        # Check for reminders that fired while the session was closed
+        missed_note = ""
+        missed_file = Path.home() / ".friday" / "reminders_missed.json"
+        if missed_file.exists():
+            try:
+                with open(missed_file) as f:
+                    missed = json.load(f)
+                if missed:
+                    labels = [m["label"] for m in missed[-3:]]
+                    count = len(missed)
+                    missed_note = (
+                        f" Also, {count} reminder{'s' if count > 1 else ''} fired while you were away: "
+                        f"{', '.join(labels)}. Mention this briefly and naturally after the briefing offer."
+                    )
+                    missed_file.write_text("[]")
+            except Exception:
+                pass
+
         await self.session.generate_reply(
             instructions=(
                 f"Say exactly this greeting first: '{chosen_greeting} {chosen_follow_up}' "
                 f"Then, in the same breath, add one short question offering a quick briefing. "
                 f"Keep the whole thing to two sentences max. Natural, warm, no lists. "
-                f"Example of the full thing: 'Evening, boss. What are you up to? Want me to pull up the weather and your schedule?' "
-                f"Do NOT call any tools. Do NOT give any briefing. Just greet and offer."
+                f"Example: 'Evening, boss. What are you up to? Want me to pull up the weather and your schedule?'"
+                f"{missed_note} "
+                f"Do NOT call any tools. Do NOT give any briefing yet. Just greet, offer, and mention missed reminders if any."
             )
         )
+
+        asyncio.create_task(self._reminder_watcher())
+
+    async def _reminder_watcher(self) -> None:
+        """
+        Lightweight loop that watches for reminders fired by the external daemon.
+        The daemon handles scheduling and notify-send; this loop only speaks them
+        aloud via TTS during an active session. Reads every 15s, zero API calls
+        unless a reminder actually fired.
+        """
+        missed_file = Path.home() / ".friday" / "reminders_missed.json"
+
+        while True:
+            await asyncio.sleep(15)
+            if not missed_file.exists():
+                continue
+            try:
+                with open(missed_file) as f:
+                    missed = json.load(f)
+                if not missed:
+                    continue
+
+                # Clear before speaking to avoid double-firing
+                missed_file.write_text("[]")
+
+                for reminder in missed:
+                    await self.session.say(reminder.get("spoken", f"Boss — reminder: {reminder['label']}"))
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
