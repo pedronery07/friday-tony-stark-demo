@@ -1,164 +1,156 @@
-# F.R.I.D.A.Y. — Tony Stark Demo
+# F.R.I.D.A.Y. — Tony Stark AI Assistant
 
 > *"Fully Responsive Intelligent Digital Assistant for You"*
 
-A Tony Stark-inspired AI assistant split into two cooperating pieces:
-
-| Component | What it is |
-|-----------|-----------|
-| **MCP Server** (`uv run friday`) | A [FastMCP](https://github.com/jlowin/fastmcp) server that exposes tools (news, web search, system info, …) over SSE. Think of it as the Stark Industries backend — it does the actual work. |
-| **Voice Agent** (`uv run friday_voice`) | A [LiveKit Agents](https://github.com/livekit/agents) voice pipeline that listens to your microphone, reasons with an LLM (Gemini 2.5 Flash by default), and speaks back with OpenAI TTS — all while pulling tools from the MCP server in real time. |
-
-Demo: [Instagram reel](https://www.instagram.com/p/DW2HjYtkwg_/)
-
-[![Demo Video Guide](https://img.youtube.com/vi/mMY9swqe3BI/maxresdefault.jpg)](https://www.youtube.com/watch?v=mMY9swqe3BI)
+A Tony Stark-inspired voice AI assistant built on [LiveKit Agents](https://github.com/livekit/agents) and [FastMCP](https://github.com/jlowin/fastmcp). Speak to it, it listens, reasons, and responds — with access to live news, weather, your calendar, GitHub activity, and persistent memory.
 
 ---
 
-## How it works
+## Architecture
 
 ```
-Microphone ──► STT (Sarvam Saaras v3)
-                    │
-                    ▼
-             LLM (Gemini 2.5 Flash)  ◄──────► MCP Server (FastMCP / SSE)
-                    │                              ├─ get_world_news
-                    ▼                              ├─ open_world_monitor
-             TTS (OpenAI nova)                     ├─ search_web
-                    │                              └─ …more tools
-                    ▼
-             Speaker / LiveKit room
+Microphone
+    │
+    ▼
+STT  (Groq — whisper-large-v3-turbo)
+    │
+    ▼
+LLM  (Google Gemini 2.5 Flash)  ◄──────► MCP Server  (FastMCP / SSE · port 8000)
+    │                                         ├─ get_world_news
+    ▼                                         ├─ get_brazil_news
+TTS  (Deepgram — aura-2-thalia-en)            ├─ get_world_finance_news
+    │                                         ├─ get_weather
+    ▼                                         ├─ get_today_schedule
+Speaker / LiveKit room                        ├─ get_github_activity
+                                              ├─ remember / recall / forget
+                                              └─ open_world_monitor / open_finance_world_monitor
 ```
 
-The voice agent connects to the MCP server via SSE at `http://127.0.0.1:8000/sse` (auto-resolved to the Windows host IP when running inside WSL).
+The voice agent connects to the MCP server via SSE at `http://127.0.0.1:8000/sse`.
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
 friday-tony-stark-demo/
-├── server.py           # uv run friday  → starts the MCP server (SSE on :8000)
-├── agent_friday.py     # uv run friday_voice → starts the LiveKit voice agent
+├── server.py               # MCP server entry point  (uv run friday)
+├── agent_friday.py         # Voice agent entry point (uv run friday_voice)
 ├── pyproject.toml
-├── .env.example        # copy → .env and fill in your keys
+├── .env.example            # Copy → .env and fill in your keys
+├── OPERATIONS.md           # Production setup and deployment guide
 │
-└── friday/             # MCP server package
-    ├── config.py       # env-var loading & app-wide settings
-    ├── tools/          # MCP tools (callable by the LLM)
-    │   ├── web.py      # search_web, fetch_url, get_world_news, open_world_monitor
-    │   ├── system.py   # get_current_time, get_system_info
-    │   └── utils.py    # format_json, word_count
-    ├── prompts/        # MCP prompt templates (summarize, explain_code, …)
-    └── resources/      # MCP resources exposed to clients (friday://info)
+└── friday/                 # MCP server package
+    ├── config.py
+    ├── tools/
+    │   ├── web.py          # News (world, Brazil, finance), web fetch, monitor launchers
+    │   ├── weather.py      # get_weather — OpenWeatherMap
+    │   ├── github_tool.py  # get_github_activity — commits, PRs, issues
+    │   ├── calendar_tool.py# get_today_schedule — Google Calendar (OAuth2)
+    │   ├── memory.py       # remember / recall / forget — local JSON storage
+    │   ├── system.py       # get_current_time, get_system_info
+    │   └── utils.py        # format_json, word_count
+    ├── prompts/            # MCP prompt templates
+    └── resources/          # MCP resources (friday://info)
 ```
 
 ---
 
-## Quick start
+## Quick Start
 
-### 1. Prerequisites
+### Prerequisites
 
 - Python ≥ 3.11
-- [`uv`](https://github.com/astral-sh/uv) — `pip install uv` or `curl -Lsf https://astral.sh/uv/install.sh | sh`
+- [`uv`](https://github.com/astral-sh/uv) — `curl -Lsf https://astral.sh/uv/install.sh | sh`
 - A [LiveKit Cloud](https://cloud.livekit.io) project (free tier works)
 
-### 2. Clone & install
+### 1. Clone & install
 
 ```bash
-git clone https://github.com/SAGAR-TAMANG/friday-tony-stark-demo.git
+git clone <your-repo-url>
 cd friday-tony-stark-demo
-uv sync          # creates .venv and installs all dependencies
+uv sync
 ```
 
-### 3. Set up environment
+### 2. Configure environment
 
 ```bash
 cp .env.example .env
-# Open .env and fill in your API keys (see the section below)
+# Fill in your API keys — see Environment Variables below
 ```
 
-### 4. Run — two terminals
-
-**Terminal 1 — MCP server** (must start first)
+### 3. Run — two terminals
 
 ```bash
+# Terminal 1 — MCP server (start this first)
 uv run friday
-```
 
-Starts the FastMCP server on `http://127.0.0.1:8000/sse`. The voice agent connects here to fetch its tools.
-
-**Terminal 2 — Voice agent**
-
-```bash
+# Terminal 2 — Voice agent
 uv run friday_voice
 ```
 
-Starts the LiveKit voice agent in **dev mode** — it joins a LiveKit room and begins listening. Open the [LiveKit Agents Playground](https://agents-playground.livekit.io) and connect to your room to talk to FRIDAY.
+Then open [agents-playground.livekit.io](https://agents-playground.livekit.io), paste your LiveKit credentials, and connect.
 
 ---
 
-## `uv run friday` vs `uv run friday_voice`
-
-| Command | Entry point | What it does |
-|---------|------------|--------------|
-| `uv run friday` | `server.py → main()` | Launches the **FastMCP server** over SSE transport on port 8000. This is the "brain backend" — it registers all tools, prompts, and resources that the LLM can call. |
-| `uv run friday_voice` | `agent_friday.py → dev()` | Launches the **LiveKit voice agent**. It builds the STT / LLM / TTS pipeline, connects to your LiveKit room, and wires up the MCP server as a tool source. The `dev()` wrapper auto-injects the `dev` CLI flag so you don't have to type it manually. |
-
-> Both processes must run **simultaneously**. The voice agent calls the MCP server in real time whenever it needs a tool (e.g. fetching news).
-
----
-
-## Environment variables
-
-Copy `.env.example` → `.env` and fill in the values below.
+## Environment Variables
 
 | Variable | Required | Where to get it |
-|----------|----------|----------------|
-| `LIVEKIT_URL` | ✅ | [LiveKit Cloud dashboard](https://cloud.livekit.io) → your project URL |
+|---|---|---|
+| `LIVEKIT_URL` | ✅ | [LiveKit Cloud](https://cloud.livekit.io) → your project URL |
 | `LIVEKIT_API_KEY` | ✅ | LiveKit Cloud → API Keys |
 | `LIVEKIT_API_SECRET` | ✅ | LiveKit Cloud → API Keys |
-| `GROQ_API_KEY` | optional | [console.groq.com](https://console.groq.com) — only needed if you switch `LLM_PROVIDER` to `"groq"` |
-| `SARVAM_API_KEY` | ✅ (default STT) | [dashboard.sarvam.ai](https://dashboard.sarvam.ai) |
-| `OPENAI_API_KEY` | ✅ (default TTS) | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| `DEEPGRAM_API_KEY` | optional | [console.deepgram.com](https://console.deepgram.com) |
-| `GOOGLE_APPLICATION_CREDENTIALS` | optional | GCP service-account JSON path — only for `STT_PROVIDER = "google"` |
-| `GOOGLE_API_KEY` | ✅ (default LLM) | [aistudio.google.com](https://aistudio.google.com/projects) |
-| `SUPABASE_URL` | optional | [supabase.com](https://supabase.com) — for the ticketing tool |
-| `SUPABASE_API_KEY` | optional | Supabase project → API settings |
+| `GOOGLE_API_KEY` | ✅ | [aistudio.google.com](https://aistudio.google.com/projects) |
+| `GROQ_API_KEY` | ✅ | [console.groq.com](https://console.groq.com) — STT |
+| `DEEPGRAM_API_KEY` | ✅ | [console.deepgram.com](https://console.deepgram.com) — TTS |
+| `OPENWEATHERMAP_API_KEY` | optional | [openweathermap.org](https://openweathermap.org/api) — free tier |
+| `WEATHER_CITY` | optional | Default city for weather queries (e.g. `São Paulo`) |
+| `GITHUB_USERNAME` | optional | Your GitHub username — for activity feed |
+| `GITHUB_TOKEN` | optional | GitHub personal access token — needed for private repos |
+| `GOOGLE_APPLICATION_CREDENTIALS` | optional | GCP service-account JSON — only for `STT_PROVIDER = "google"` |
+
+**Google Calendar** uses OAuth2 and does not require an env variable. Place your credentials file at `~/.friday/google_credentials.json` — see the comment in `.env.example` for setup steps.
 
 ---
 
-## Switching providers
+## Switching Providers
 
-Open `agent_friday.py` and change the provider constants at the top:
+Edit the constants at the top of `agent_friday.py`:
 
 ```python
-STT_PROVIDER = "sarvam"   # "sarvam" | "whisper"
-LLM_PROVIDER = "gemini"   # "gemini" | "openai"
-TTS_PROVIDER = "openai"   # "openai" | "sarvam"
+STT_PROVIDER     = "groq"    # "groq" | "whisper"
+LLM_PROVIDER     = "gemini"  # "gemini" | "openai"
+TTS_PROVIDER     = "deepgram"
 ```
 
 ---
 
-## Adding a new tool
+## Adding a New Tool
 
-1. Create or open a file in `friday/tools/`
-2. Define a `register(mcp)` function and decorate tools with `@mcp.tool()`
-3. Import and call `register(mcp)` inside `friday/tools/__init__.py`
+1. Create a file in `friday/tools/` with a `register(mcp)` function
+2. Decorate each tool with `@mcp.tool()`
+3. Import and call `register(mcp)` in `friday/tools/__init__.py`
+4. Add the trigger phrases and behavior to the `SYSTEM_PROMPT` in `agent_friday.py`
 
-The MCP server will pick it up on next start.
+The MCP server picks it up on next start.
 
 ---
 
-## Tech stack
+## Tech Stack
 
 - **[FastMCP](https://github.com/jlowin/fastmcp)** — MCP server framework
 - **[LiveKit Agents](https://github.com/livekit/agents)** — real-time voice pipeline
-- **Sarvam Saaras v3** — STT (Indian-English optimised)
+- **Groq** (`whisper-large-v3-turbo`) — Speech-to-Text
 - **Google Gemini 2.5 Flash** — LLM
-- **OpenAI TTS** (`nova` voice) — TTS
-- **[uv](https://github.com/astral-sh/uv)** — fast Python package manager
+- **Deepgram** (`aura-2-thalia-en`) — Text-to-Speech
+- **Silero VAD** — Voice Activity Detection
+- **[uv](https://github.com/astral-sh/uv)** — Python package manager
+
+---
+
+## Credits
+
+Forked from [SAGAR-TAMANG/friday-tony-stark-demo](https://github.com/SAGAR-TAMANG/friday-tony-stark-demo) — the original project that laid the foundation for this assistant.
 
 ---
 
