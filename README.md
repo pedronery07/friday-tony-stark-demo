@@ -2,7 +2,7 @@
 
 > *"Fully Responsive Intelligent Digital Assistant for You"*
 
-A Tony Stark-inspired voice AI assistant built on [LiveKit Agents](https://github.com/livekit/agents) and [FastMCP](https://github.com/jlowin/fastmcp). Speak to it, it listens, reasons, and responds — with access to live news, weather, your calendar, GitHub activity, reminders, and persistent memory.
+A Tony Stark-inspired voice AI assistant built on [LiveKit Agents](https://github.com/livekit/agents) and [FastMCP](https://github.com/jlowin/fastmcp). Speak to it, it listens, reasons, and responds — with access to live news, weather, your calendar, Spotify, Gmail, GitHub activity, reminders, and persistent memory.
 
 ---
 
@@ -15,17 +15,17 @@ Microphone
 STT  (Groq — whisper-large-v3-turbo)
     │
     ▼
-LLM  (Groq llama-3.3-70b / Gemini 2.5 Flash)  ◄──► MCP Server  (FastMCP / SSE · port 8000)
-    │                                                    ├─ get_world_news / get_brazil_news
-    ▼                                                    ├─ get_world_finance_news
-TTS  (Deepgram — aura-2-thalia-en)                       ├─ get_weather
-    │                                                    ├─ get_today_schedule
-    ▼                                                    ├─ create_calendar_event / delete_calendar_event
-Speaker / LiveKit room                                   ├─ get_github_activity
-                                                         ├─ set_reminder / list_reminders / cancel_reminder
-                                                         ├─ summarize_url / get_clipboard
-                                                         ├─ remember / recall / forget
-                                                         └─ open_world_monitor / open_finance_world_monitor
+LLM  (Gemini 2.0 Flash)  ◄──► MCP Server  (FastMCP / SSE · port 8000)
+    │                              ├─ get_world_news / get_brazil_news / open_world_monitor
+    ▼                              ├─ get_weather
+TTS  (Deepgram — aura-2-thalia-en) ├─ get_today_schedule / get_week_schedule
+    │                              ├─ create_calendar_event / delete_calendar_event
+    ▼                              ├─ get_unread_emails
+Speaker / LiveKit room             ├─ play_music / pause_music / ... (Spotify)
+                                   ├─ get_github_activity
+                                   ├─ set_reminder / list_reminders / cancel_reminder
+                                   ├─ summarize_url / get_clipboard
+                                   └─ remember / recall / forget
 
 friday_reminders.py  (systemd user service)
     └─ polls ~/.friday/timers.json → notify-send → reminders_missed.json
@@ -49,14 +49,15 @@ friday-tony-stark-demo/
 └── friday/                  # MCP server package
     ├── config.py
     ├── tools/
-    │   ├── web.py           # News (world, Brazil, finance), summarize_url, monitor launchers
+    │   ├── web.py           # News (world, Brazil), summarize_url, open_world_monitor
     │   ├── weather.py       # get_weather — OpenWeatherMap
     │   ├── github_tool.py   # get_github_activity — commits, PRs, issues
-    │   ├── calendar_tool.py # get_today_schedule, create_calendar_event, delete_calendar_event
+    │   ├── calendar_tool.py # get_today/week_schedule, create/delete_calendar_event
+    │   ├── gmail_tool.py    # get_unread_emails — Gmail read-only
+    │   ├── spotify_tool.py  # play_music, pause, resume, next, previous, volume, devices
     │   ├── timers.py        # set_reminder, list_reminders, cancel_reminder
     │   ├── memory.py        # remember / recall / forget — local JSON storage
-    │   ├── system.py        # get_current_time, get_system_info, get_clipboard
-    │   └── utils.py         # format_json, word_count
+    │   └── system.py        # get_current_time, get_clipboard
     ├── prompts/             # MCP prompt templates
     └── resources/           # MCP resources (friday://info)
 ```
@@ -108,15 +109,18 @@ Then open [agents-playground.livekit.io](https://agents-playground.livekit.io), 
 | `LIVEKIT_URL` | ✅ | [LiveKit Cloud](https://cloud.livekit.io) → your project URL |
 | `LIVEKIT_API_KEY` | ✅ | LiveKit Cloud → API Keys |
 | `LIVEKIT_API_SECRET` | ✅ | LiveKit Cloud → API Keys |
-| `GROQ_API_KEY` | ✅ | [console.groq.com](https://console.groq.com) — STT + LLM |
+| `GROQ_API_KEY` | ✅ | [console.groq.com](https://console.groq.com) — STT |
+| `GOOGLE_API_KEY` | ✅ | [aistudio.google.com](https://aistudio.google.com/projects) — LLM (Gemini 2.0 Flash) |
 | `DEEPGRAM_API_KEY` | ✅ | [console.deepgram.com](https://console.deepgram.com) — TTS |
-| `GOOGLE_API_KEY` | optional | [aistudio.google.com](https://aistudio.google.com/projects) — if using Gemini as LLM |
 | `OPENWEATHERMAP_API_KEY` | optional | [openweathermap.org](https://openweathermap.org/api) — free tier |
 | `WEATHER_CITY` | optional | Default city for weather queries (e.g. `São Paulo`) |
+| `FRIDAY_TIMEZONE` | optional | IANA timezone override (auto-detected from `WEATHER_CITY` if blank) |
 | `GITHUB_USERNAME` | optional | Your GitHub username — for activity feed |
 | `GITHUB_TOKEN` | optional | GitHub personal access token — needed for private repos |
+| `SPOTIFY_CLIENT_ID` | optional | [developer.spotify.com](https://developer.spotify.com) — requires Premium |
+| `SPOTIFY_CLIENT_SECRET` | optional | Spotify Developer Dashboard |
 
-**Google Calendar** uses OAuth2. Place your credentials at `~/.friday/google_credentials.json` and run the one-time auth flow — see `OPERATIONS.md`.
+**Google Calendar & Gmail** use OAuth2. Place credentials at `~/.friday/google_credentials.json` and run the one-time auth — see `OPERATIONS.md`.
 
 ---
 
@@ -126,9 +130,14 @@ Edit the constants at the top of `agent_friday.py`:
 
 ```python
 STT_PROVIDER  = "groq"    # "groq" | "whisper"
-LLM_PROVIDER  = "groq"    # "groq" | "gemini" | "openai"
+LLM_PROVIDER  = "gemini"  # "gemini" | "groq" | "openai"
 TTS_PROVIDER  = "deepgram"
+
+GEMINI_LLM_MODEL = "gemini-2.0-flash"   # 1M TPM, 1500 req/day free tier
+GROQ_LLM_MODEL   = "llama-3.3-70b-versatile"  # fallback; 12K TPM free tier
 ```
+
+> **Note:** Groq's free tier (12K TPM) is too small for an agent with 20+ MCP tool schemas. Gemini 2.0 Flash is the recommended LLM for free-tier usage.
 
 ---
 
@@ -148,7 +157,7 @@ The MCP server picks it up on next start.
 - **[FastMCP](https://github.com/jlowin/fastmcp)** — MCP server framework
 - **[LiveKit Agents](https://github.com/livekit/agents)** — real-time voice pipeline
 - **Groq** (`whisper-large-v3-turbo`) — Speech-to-Text
-- **Groq** (`llama-3.3-70b-versatile`) — LLM (default) · also supports Gemini 2.5 Flash / OpenAI GPT-4o
+- **Gemini** (`gemini-2.0-flash`) — LLM (default) · also supports Groq llama-3.3-70b / OpenAI GPT-4o
 - **Deepgram** (`aura-2-thalia-en`) — Text-to-Speech
 - **Silero VAD** — Voice Activity Detection
 - **[uv](https://github.com/astral-sh/uv)** — Python package manager

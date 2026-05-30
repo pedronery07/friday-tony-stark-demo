@@ -33,8 +33,10 @@ External data stored in `~/.friday/` (outside the repo, never committed):
 | `memory.json` | Persistent memories |
 | `timers.json` | Pending reminders |
 | `reminders_missed.json` | Reminders that fired while no session was active |
-| `google_credentials.json` | Google Calendar OAuth credentials |
+| `google_credentials.json` | Google OAuth2 client credentials (Calendar + Gmail) |
 | `google_token.json` | Auto-generated after first Calendar auth |
+| `google_gmail_token.json` | Auto-generated after first Gmail auth |
+| `spotify_cache` | Spotipy OAuth token cache |
 
 ---
 
@@ -110,6 +112,37 @@ The token is saved to `~/.friday/google_token.json` and used automatically on al
 
 ---
 
+## Gmail Setup
+
+Gmail uses the same OAuth2 credentials as Calendar. Enable the Gmail API first, then run:
+
+```bash
+source .venv/bin/activate
+python -c "from friday.tools.gmail_tool import _get_service; _get_service(); print('Authorized.')"
+```
+
+The token is saved to `~/.friday/google_gmail_token.json` (separate from the Calendar token).
+
+---
+
+## Spotify Setup
+
+Requires a Spotify Premium account and a Spotify Developer app.
+
+1. Go to [developer.spotify.com](https://developer.spotify.com) → Dashboard → Create app
+2. Add redirect URI: `http://127.0.0.1:8888/callback`
+3. Copy Client ID and Client Secret to `.env`
+4. Run the one-time auth:
+
+```bash
+source .venv/bin/activate
+python -c "from friday.tools.spotify_tool import _get_sp; _get_sp(); print('Authorized.')"
+```
+
+The token is cached at `~/.friday/spotify_cache`.
+
+---
+
 ## Development Workflow
 
 ```bash
@@ -154,7 +187,6 @@ This script: `git pull` → `uv sync` → `systemctl restart` (MCP + agent).
 |---|---|
 | "What's happening?" / "Any news?" | Global news brief → opens world monitor |
 | "Notícias do Brasil" / "Brazil news" | Brazilian news brief (G1, Folha, Agência Brasil, BBC Brasil) |
-| "Finance update" / "Markets?" | Finance brief → opens finance monitor |
 | "What's the weather?" | Current conditions for your city |
 | "What's on my agenda?" | Today's Google Calendar events |
 | "What's on this week?" | Events from today through Sunday, grouped by day |
@@ -165,6 +197,9 @@ This script: `git pull` → `uv sync` → `systemctl restart` (MCP + agent).
 | "Cancel the X reminder" | Cancels a pending reminder |
 | "Summarize what I copied" | Reads clipboard → fetches URL → summarizes |
 | "Summarize bbc.com" | Fetches and summarizes a webpage |
+| "Play [artist/song]" | Plays music on Spotify (desktop device by default) |
+| "Pause / next / volume to 50%" | Spotify playback control |
+| "Any emails?" | Summarizes unread Gmail messages |
 | "Any GitHub activity?" | Recent commits, PRs, issues |
 | "Remember that..." | Stores a fact to `~/.friday/memory.json` |
 | "Do you remember..." | Recalls stored facts |
